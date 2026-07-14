@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Guía la bola</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #menu, #result {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px;
+    color: #eee; font-family: system-ui, sans-serif; background: #000;
+  }
+  #result { display: none; }
+  h1 { margin: 0 0 8px; }
+  .group { display: flex; gap: 8px; }
+  button {
+    padding: 10px 18px; font-size: 15px; border: 1px solid #555;
+    background: #111; color: #eee; border-radius: 6px; cursor: pointer;
+  }
+  button.selected { background: #b91c1c; border-color: #ef4444; }
+  #play { background: #16a34a; border-color: #22c55e; padding: 12px 28px; font-size: 18px; margin-top: 8px; }
+  canvas { display: none; background: #000; }
+  #hud {
+    position: fixed; top: 10px; left: 0; right: 0; text-align: center;
+    color: #eee; font-family: system-ui, sans-serif; font-size: 20px;
+    display: none; pointer-events: none;
+  }
+  #controls {
+    position: fixed; bottom: 10px; left: 0; right: 0; text-align: center;
+    color: #aaa; font-family: system-ui, sans-serif; font-size: 14px;
+    pointer-events: none; z-index: 10;
+  }
+  #pauseOverlay {
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    color: #fff; font-family: system-ui, sans-serif; font-size: 28px;
+    background: rgba(0,0,0,0.5); pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="menu">
+  <h1>Guía la bola por el camino</h1>
+  <div>Dificultad</div>
+  <div class="group" id="difficulty">
+    <button data-val="easy">Fácil</button>
+    <button data-val="medium" class="selected">Medio</button>
+    <button data-val="hard">Difícil</button>
+  </div>
+  <div>Duración</div>
+  <div class="group" id="duration">
+    <button data-val="30">30s</button>
+    <button data-val="60" class="selected">60s</button>
+    <button data-val="90">90s</button>
+  </div>
+  <button id="play">Jugar</button>
+</div>
+
+<div id="hud"></div>
+<div id="controls">Izquierda: A / D &nbsp;&nbsp; Derecha: ← / → &nbsp;&nbsp; Pausa: P</div>
+<div id="pauseOverlay">PAUSA — pulsa P para continuar</div>
+<canvas id="game"></canvas>
+
+<div id="result">
+  <h1>Resultado</h1>
+  <div id="resultText"></div>
+  <button id="again">Volver a jugar</button>
+</div>
+
+<script>
+(() => {
+  const menu = document.getElementById('menu');
+  const resultScreen = document.getElementById('result');
+  const resultText = document.getElementById('resultText');
+  const hud = document.getElementById('hud');
+  const pauseOverlay = document.getElementById('pauseOverlay');
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  let difficulty = 'medium';
+  let duration = 60;
+
+  function wireGroup(id, setter) {
+    const el = document.getElementById(id);
+    el.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        el.querySelectorAll('button').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        setter(btn.dataset.val);
+      });
+    });
+  }
+  wireGroup('difficulty', v => difficulty = v);
+  wireGroup('duration', v => duration = Number(v));
+
+  document.getElementById('play').addEventListener('click', startGame);
+  document.getElementById('again').addEventListener('click', () => {
+    resultScreen.style.display = 'none';
+    menu.style.display = 'flex';
+  });
+
+  // ---- input ----
+  const keys = new Set();
+  window.addEventListener('keydown', e => {
+    keys.add(e.key);
+    if ((e.key === 'p' || e.key === 'P') && !e.repeat && running) togglePause();
+  });
+  window.addEventListener('keyup', e => keys.delete(e.key));
+
+  // ---- audio alarm (Web Audio, one oscillator reused) ----
+  let audioCtx = null, osc = null, gain = null;
+  function ensureAudio() {
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    osc = audioCtx.createOscillator();
+    gain = audioCtx.createGain();
+    osc.type = 'square';
+    osc.frequency.value = 440;
+    gain.gain.value = 0;
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start();
+  }
+  function setAlarm(on) {
+    if (!audioCtx) return;
+    gain.gain.setTargetAtTime(on ? 0.15 : 0, audioCtx.currentTime, 0.02);
+  }
+
+  // ---- path generation: mix of straight and curved segments ----
+  // pathCenterX(distance) -> offset from lane center, in px, for a given scroll distance
+  function buildPath(totalDistance, laneHalfWidth, margin) {
+    const segments = [];
+    let d = 0;
+    let lastOffset = 0;
+    const maxOffset = laneHalfWidth - margin;
+    while (d < totalDistance) {
+      const len = 400 + Math.random() * 500;
+      const isCurve = Math.random() < 0.5;
+      let target = lastOffset + (Math.random() * 2 - 1) * maxOffset * 0.6;
+      target = Math.max(-maxOffset, Math.min(maxOffset, target));
+      segments.push({ start: d, len, from: lastOffset, to: target, curve: isCurve });
+      lastOffset = target;
+      d += len;
+    }
+    return function pathCenterX(distance) {
+      if (distance < 0) distance = 0;
+      // find segment
+      let seg = segments[segments.length - 1];
+      for (const s of segments) {
+        if (distance >= s.start && distance < s.start + s.len) { seg = s; break; }
+      }
+      const t = Math.min(1, Math.max(0, (distance - seg.start) / seg.len));
+      const tt = seg.curve ? (1 - Math.cos(t * Math.PI)) / 2 : t; // ease for curves, linear for straights
+      return seg.from + (seg.to - seg.from) * tt;
+    };
+  }
+
+  const DIFFICULTY_WIDTH = { easy: 220, medium: 140, hard: 90 };
+  const SCROLL_SPEED = 160; // px/sec
+  const BALL_Y_RATIO = 0.22; // fixed vertical position of the balls
+  const BALL_RADIUS = 12;
+
+  let W, H, laneWidth;
+  let leftPath, rightPath, pathWidth;
+  let leftBall, rightBall;
+  let scrollOffset = 0;
+  let timeLeft = duration;
+  let lastTs = 0;
+  let running = false;
+  let paused = false;
+  let leftOutTime = 0, rightOutTime = 0, totalTime = 0;
+  let leftAlarm = false, rightAlarm = false;
+
+  function togglePause() {
+    paused = !paused;
+    if (paused) {
+      setAlarm(false);
+      pauseOverlay.style.display = 'flex';
+    } else {
+      lastTs = performance.now();
+      pauseOverlay.style.display = 'none';
+      requestAnimationFrame(loop);
+    }
+  }
+
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W;
+    canvas.height = H;
+    laneWidth = W / 2;
+  }
+  window.addEventListener('resize', () => { if (running) resize(); });
+
+  function startGame() {
+    ensureAudio();
+    resize();
+    pathWidth = DIFFICULTY_WIDTH[difficulty];
+    const laneHalfWidth = laneWidth / 2;
+    const margin = pathWidth / 2 + 10;
+    const totalDistance = SCROLL_SPEED * duration + H;
+    leftPath = buildPath(totalDistance, laneHalfWidth, margin);
+    rightPath = buildPath(totalDistance, laneHalfWidth, margin);
+
+    leftBall = { x: laneWidth / 2, vx: 0 };
+    rightBall = { x: laneWidth + laneWidth / 2, vx: 0 };
+    scrollOffset = 0;
+    timeLeft = duration;
+    leftOutTime = 0; rightOutTime = 0; totalTime = 0;
+    leftAlarm = false; rightAlarm = false;
+    running = true;
+    paused = false;
+    pauseOverlay.style.display = 'none';
+
+    menu.style.display = 'none';
+    resultScreen.style.display = 'none';
+    canvas.style.display = 'block';
+    hud.style.display = 'block';
+    lastTs = performance.now();
+    requestAnimationFrame(loop);
+  }
+
+  function endGame() {
+    running = false;
+    setAlarm(false);
+    canvas.style.display = 'none';
+    hud.style.display = 'none';
+    const leftPct = Math.max(0, 100 - (leftOutTime / totalTime) * 100).toFixed(0);
+    const rightPct = Math.max(0, 100 - (rightOutTime / totalTime) * 100).toFixed(0);
+    resultText.innerHTML = `Bola izquierda: ${leftPct}% en el camino<br>Bola derecha: ${rightPct}% en el camino`;
+    resultScreen.style.display = 'flex';
+  }
+
+  const ACCEL = 900, MAX_SPEED = 420, FRICTION = 0.85;
+
+  function updateBall(ball, leftKey, rightKey, laneMin, laneMax, dt) {
+    let dir = 0;
+    if (keys.has(leftKey)) dir -= 1;
+    if (keys.has(rightKey)) dir += 1;
+    ball.vx += dir * ACCEL * dt;
+    ball.vx *= Math.pow(FRICTION, dt * 60);
+    ball.vx = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, ball.vx));
+    ball.x += ball.vx * dt;
+    if (ball.x < laneMin + BALL_RADIUS) { ball.x = laneMin + BALL_RADIUS; ball.vx = 0; }
+    if (ball.x > laneMax - BALL_RADIUS) { ball.x = laneMax - BALL_RADIUS; ball.vx = 0; }
+  }
+
+  function drawLane(laneMin, laneCenter, pathFn) {
+    ctx.beginPath();
+    for (let y = 0; y <= H; y += 4) {
+      const distance = scrollOffset + (H - y);
+      const cx = laneCenter + pathFn(distance);
+      const lx = cx - pathWidth / 2;
+      if (y === 0) ctx.moveTo(lx, y); else ctx.lineTo(lx, y);
+    }
+    for (let y = H; y >= 0; y -= 4) {
+      const distance = scrollOffset + (H - y);
+      const cx = laneCenter + pathFn(distance);
+      ctx.lineTo(cx + pathWidth / 2, y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+  }
+
+  function pathXAtBall(laneCenter, pathFn) {
+    const ballY = H * BALL_Y_RATIO;
+    const distance = scrollOffset + (H - ballY);
+    return laneCenter + pathFn(distance);
+  }
+
+  function loop(ts) {
+    if (!running || paused) return;
+    const dt = Math.min(0.05, (ts - lastTs) / 1000);
+    lastTs = ts;
+
+    timeLeft -= dt;
+    totalTime += dt;
+    scrollOffset += SCROLL_SPEED * dt;
+
+    updateBall(leftBall, 'a', 'd', 0, laneWidth, dt);
+    updateBall(rightBall, 'ArrowLeft', 'ArrowRight', laneWidth, W, dt);
+
+    const leftCenterX = pathXAtBall(laneWidth / 2, leftPath);
+    const rightCenterX = pathXAtBall(laneWidth + laneWidth / 2, rightPath);
+    const leftOut = Math.abs(leftBall.x - leftCenterX) > pathWidth / 2 - BALL_RADIUS * 0.4;
+    const rightOut = Math.abs(rightBall.x - rightCenterX) > pathWidth / 2 - BALL_RADIUS * 0.4;
+    if (leftOut) leftOutTime += dt;
+    if (rightOut) rightOutTime += dt;
+    leftAlarm = leftOut; rightAlarm = rightOut;
+    setAlarm(leftAlarm || rightAlarm);
+
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+
+    drawLane(0, laneWidth / 2, leftPath);
+    drawLane(laneWidth, laneWidth + laneWidth / 2, rightPath);
+
+    ctx.strokeStyle = '#444';
+    ctx.setLineDash([6, 6]);
+    ctx.beginPath();
+    ctx.moveTo(laneWidth, 0);
+    ctx.lineTo(laneWidth, H);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const ballY = H * BALL_Y_RATIO;
+    ctx.fillStyle = leftAlarm ? '#ff8800' : '#e11d1d';
+    ctx.beginPath();
+    ctx.arc(leftBall.x, ballY, BALL_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = rightAlarm ? '#ff8800' : '#e11d1d';
+    ctx.beginPath();
+    ctx.arc(rightBall.x, ballY, BALL_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+
+    hud.textContent = Math.ceil(timeLeft) + 's';
+
+    if (timeLeft <= 0) { endGame(); return; }
+    requestAnimationFrame(loop);
+  }
+})();
+</script>
+</body>
+</html>
