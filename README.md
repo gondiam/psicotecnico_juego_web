@@ -37,6 +37,7 @@ Puedes jugar solo con una bolita (por ejemplo, con las flechas) o intentar contr
 ## Otras teclas
 
 - **P**: pausa el juego. Vuelve a pulsar **P** para continuar.
+- **Esc**: sale de la partida y vuelve directamente al menú principal, sin esperar a que termine el tiempo.
 
 ## Las opciones del menú
 

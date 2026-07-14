@@ -62,7 +62,7 @@
 </div>
 
 <div id="hud"></div>
-<div id="controls">Izquierda: A / D &nbsp;&nbsp; Derecha: ← / → &nbsp;&nbsp; Pausa: P</div>
+<div id="controls">Izquierda: A / D &nbsp;&nbsp; Derecha: ← / → &nbsp;&nbsp; Pausa: P &nbsp;&nbsp; Salir: Esc</div>
 <div id="pauseOverlay">PAUSA — pulsa P para continuar</div>
 <canvas id="game"></canvas>
 
@@ -117,6 +117,7 @@
   window.addEventListener('keydown', e => {
     keys.add(e.key);
     if ((e.key === 'p' || e.key === 'P') && !e.repeat && running) togglePause();
+    if (e.key === 'Escape' && !e.repeat && running) quitToMenu();
   });
   window.addEventListener('keyup', e => keys.delete(e.key));
 
@@ -257,6 +258,16 @@
     const rightPct = Math.max(0, 100 - (rightOutTime / totalTime) * 100).toFixed(0);
     resultText.innerHTML = `Bola izquierda: ${leftPct}% en el camino<br>Bola derecha: ${rightPct}% en el camino`;
     resultScreen.style.display = 'flex';
+  }
+
+  function quitToMenu() {
+    running = false;
+    paused = false;
+    setAlarm(false);
+    canvas.style.display = 'none';
+    hud.style.display = 'none';
+    pauseOverlay.style.display = 'none';
+    menu.style.display = 'flex';
   }
 
   // ACCEL must be well above FRICTION's steady-state drag (~9.75/s at FRICTION=0.85)
