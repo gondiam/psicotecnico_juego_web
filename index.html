@@ -19,6 +19,7 @@
   }
   button.selected { background: #b91c1c; border-color: #ef4444; }
   #play { background: #16a34a; border-color: #22c55e; padding: 12px 28px; font-size: 18px; margin-top: 8px; }
+  .hint { font-size: 13px; color: #999; text-align: center; max-width: 380px; margin-top: -10px; }
   canvas { display: none; background: #000; }
   #hud {
     position: fixed; top: 10px; left: 0; right: 0; text-align: center;
@@ -47,14 +48,16 @@
     <button data-val="medium" class="selected">Medio</button>
     <button data-val="hard">Difícil</button>
   </div>
+  <div class="hint">Controla lo ancho que es el camino: en Fácil hay más margen para equivocarse, en Difícil el camino es muy estrecho y exige precisión.</div>
   <div>Duración</div>
   <div class="group" id="duration">
     <button data-val="30">30s</button>
     <button data-val="60" class="selected">60s</button>
     <button data-val="90">90s</button>
   </div>
-  <div>Velocidad de las bolitas: <span id="speedLabel">x1.0</span></div>
+  <div>Velocidad de reacción de las bolitas: <span id="speedLabel">x1.0</span></div>
   <input type="range" id="speedSlider" min="1" max="2" step="0.1" value="1">
+  <div class="hint">Controla lo rápido que se mueve la bolita al pulsar las teclas: x1 es más lenta y fácil de controlar, x2 es más ágil pero más difícil de dominar.</div>
   <button id="play">Jugar</button>
 </div>
 
@@ -137,7 +140,7 @@
 
   // ---- path generation: mix of straight and curved segments ----
   // pathCenterX(distance) -> offset from lane center, in px, for a given scroll distance
-  function buildPath(totalDistance, laneHalfWidth, margin, straightDistance) {
+  function buildPath(totalDistance, laneHalfWidth, margin, straightDistance, scrollSpeed) {
     const segments = [];
     let lastOffset = 0;
     const maxOffset = laneHalfWidth - margin;
@@ -147,7 +150,13 @@
     while (d < totalDistance) {
       const len = 400 + Math.random() * 500;
       const isCurve = Math.random() < 0.5;
-      let target = lastOffset + (Math.random() * 2 - 1) * maxOffset * 0.6;
+      // cap how far the path can swing in this segment so the ball can actually
+      // keep up: curve easing peaks at swing*PI/2 per segment duration, so bound
+      // the swing by the ball's real top speed (with margin for accel ramp-up/reaction time)
+      const segTime = len / scrollSpeed;
+      const maxReachableSwing = (MAX_SPEED * BALL_CATCHUP_FACTOR * segTime) / (Math.PI / 2);
+      const maxSwing = Math.min(maxOffset * 0.6, maxReachableSwing);
+      let target = lastOffset + (Math.random() * 2 - 1) * maxSwing;
       target = Math.max(-maxOffset, Math.min(maxOffset, target));
       segments.push({ start: d, len, from: lastOffset, to: target, curve: isCurve });
       lastOffset = target;
@@ -167,8 +176,12 @@
   }
 
   const DIFFICULTY_WIDTH = { easy: 220, medium: 140, hard: 90 };
-  const SCROLL_SPEED = 160; // px/sec, at x1 speed
+  const SCROLL_SPEED = 160; // px/sec, camino siempre avanza a este ritmo (el slider no lo toca)
   const STRAIGHT_SECONDS = 4; // straight, centered start so the ball begins on the path
+  const BASE_MAX_SPEED = 420; // ball's top lateral speed at slider x1
+  const BASE_ACCEL = 4800; // at slider x1
+  let MAX_SPEED, ACCEL; // scaled by speedMult in startGame — this is what the slider controls
+  const BALL_CATCHUP_FACTOR = 0.6; // leaves margin for accel ramp-up/reaction time so curves stay reachable
   const BALL_Y_RATIO = 0.22; // fixed vertical position of the balls
   const BALL_RADIUS = 12;
 
@@ -207,14 +220,15 @@
   function startGame() {
     ensureAudio();
     resize();
+    MAX_SPEED = BASE_MAX_SPEED * speedMult;
+    ACCEL = BASE_ACCEL * speedMult;
     pathWidth = DIFFICULTY_WIDTH[difficulty];
     const laneHalfWidth = laneWidth / 2;
     const margin = pathWidth / 2 + 10;
-    const speed = SCROLL_SPEED * speedMult;
-    const totalDistance = speed * duration + H;
-    const straightDistance = H + speed * STRAIGHT_SECONDS;
-    leftPath = buildPath(totalDistance, laneHalfWidth, margin, straightDistance);
-    rightPath = buildPath(totalDistance, laneHalfWidth, margin, straightDistance);
+    const totalDistance = SCROLL_SPEED * duration + H;
+    const straightDistance = H + SCROLL_SPEED * STRAIGHT_SECONDS;
+    leftPath = buildPath(totalDistance, laneHalfWidth, margin, straightDistance, SCROLL_SPEED);
+    rightPath = buildPath(totalDistance, laneHalfWidth, margin, straightDistance, SCROLL_SPEED);
 
     leftBall = { x: laneWidth / 2, vx: 0 };
     rightBall = { x: laneWidth + laneWidth / 2, vx: 0 };
@@ -245,7 +259,9 @@
     resultScreen.style.display = 'flex';
   }
 
-  const ACCEL = 900, MAX_SPEED = 420, FRICTION = 0.85;
+  // ACCEL must be well above FRICTION's steady-state drag (~9.75/s at FRICTION=0.85)
+  // times MAX_SPEED, otherwise holding a key "a tope" never actually reaches MAX_SPEED.
+  const FRICTION = 0.85;
 
   function updateBall(ball, leftKey, rightKey, laneMin, laneMax, dt) {
     let dir = 0;
@@ -290,7 +306,7 @@
 
     timeLeft -= dt;
     totalTime += dt;
-    scrollOffset += SCROLL_SPEED * speedMult * dt;
+    scrollOffset += SCROLL_SPEED * dt;
 
     updateBall(leftBall, 'a', 'd', 0, laneWidth, dt);
     updateBall(rightBall, 'ArrowLeft', 'ArrowRight', laneWidth, W, dt);
