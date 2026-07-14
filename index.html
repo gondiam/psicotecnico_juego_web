@@ -53,6 +53,8 @@
     <button data-val="60" class="selected">60s</button>
     <button data-val="90">90s</button>
   </div>
+  <div>Velocidad de las bolitas: <span id="speedLabel">x1.0</span></div>
+  <input type="range" id="speedSlider" min="1" max="2" step="0.1" value="1">
   <button id="play">Jugar</button>
 </div>
 
@@ -79,6 +81,14 @@
 
   let difficulty = 'medium';
   let duration = 60;
+  let speedMult = 1;
+
+  const speedSlider = document.getElementById('speedSlider');
+  const speedLabel = document.getElementById('speedLabel');
+  speedSlider.addEventListener('input', () => {
+    speedMult = Number(speedSlider.value);
+    speedLabel.textContent = 'x' + speedMult.toFixed(1);
+  });
 
   function wireGroup(id, setter) {
     const el = document.getElementById(id);
@@ -127,11 +137,13 @@
 
   // ---- path generation: mix of straight and curved segments ----
   // pathCenterX(distance) -> offset from lane center, in px, for a given scroll distance
-  function buildPath(totalDistance, laneHalfWidth, margin) {
+  function buildPath(totalDistance, laneHalfWidth, margin, straightDistance) {
     const segments = [];
-    let d = 0;
     let lastOffset = 0;
     const maxOffset = laneHalfWidth - margin;
+    // first few seconds: straight line, ball starts centered on it
+    segments.push({ start: 0, len: straightDistance, from: 0, to: 0, curve: false });
+    let d = straightDistance;
     while (d < totalDistance) {
       const len = 400 + Math.random() * 500;
       const isCurve = Math.random() < 0.5;
@@ -155,7 +167,8 @@
   }
 
   const DIFFICULTY_WIDTH = { easy: 220, medium: 140, hard: 90 };
-  const SCROLL_SPEED = 160; // px/sec
+  const SCROLL_SPEED = 160; // px/sec, at x1 speed
+  const STRAIGHT_SECONDS = 4; // straight, centered start so the ball begins on the path
   const BALL_Y_RATIO = 0.22; // fixed vertical position of the balls
   const BALL_RADIUS = 12;
 
@@ -197,9 +210,11 @@
     pathWidth = DIFFICULTY_WIDTH[difficulty];
     const laneHalfWidth = laneWidth / 2;
     const margin = pathWidth / 2 + 10;
-    const totalDistance = SCROLL_SPEED * duration + H;
-    leftPath = buildPath(totalDistance, laneHalfWidth, margin);
-    rightPath = buildPath(totalDistance, laneHalfWidth, margin);
+    const speed = SCROLL_SPEED * speedMult;
+    const totalDistance = speed * duration + H;
+    const straightDistance = H + speed * STRAIGHT_SECONDS;
+    leftPath = buildPath(totalDistance, laneHalfWidth, margin, straightDistance);
+    rightPath = buildPath(totalDistance, laneHalfWidth, margin, straightDistance);
 
     leftBall = { x: laneWidth / 2, vx: 0 };
     rightBall = { x: laneWidth + laneWidth / 2, vx: 0 };
@@ -275,7 +290,7 @@
 
     timeLeft -= dt;
     totalTime += dt;
-    scrollOffset += SCROLL_SPEED * dt;
+    scrollOffset += SCROLL_SPEED * speedMult * dt;
 
     updateBall(leftBall, 'a', 'd', 0, laneWidth, dt);
     updateBall(rightBall, 'ArrowLeft', 'ArrowRight', laneWidth, W, dt);
