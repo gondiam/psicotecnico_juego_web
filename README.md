@@ -4,7 +4,7 @@ Un juego sencillo para jugar en el navegador de internet (Chrome, Safari, Edge..
 
 ## Cómo empezar a jugar
 
-1. Haz clic en este enlace: **https://gondiam.github.io/psicotecnico_juego_web/**
+1. Haz clic en este enlace: **https://gondiam.github.io/coordinacion_bolitas_juego_web/**
 2. Espera unos segundos a que cargue la página.
 3. Verás un menú en la pantalla. Ahí eliges las opciones del juego (se explican más abajo).
 4. Cuando quieras empezar, haz clic en el botón verde que dice **"Jugar"**.
